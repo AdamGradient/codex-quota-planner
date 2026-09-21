@@ -8,6 +8,16 @@
 
 > 这是社区工具，与 OpenAI 官方无隶属或背书关系。
 
+## 界面预览
+
+![Codex Quota Planner 界面预览](./assets/app-preview.png)
+
+## 宣传海报
+
+<p align="center">
+  <img src="./assets/xiaohongshu-poster.png" alt="Codex Quota Planner 小红书宣传海报" width="480">
+</p>
+
 ## 为什么做它
 
 额度规划看起来只是除法，真正容易出错的是“除以什么”。
