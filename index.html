@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="按自然日规划 Codex 使用额度，计算今天可用额度和今晚最低保留额度。">
+  <title>Codex 额度规划器</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M18 42V30a14 14 0 0 1 28 0v12' fill='none' stroke='%235de4c7' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M32 30l8-8' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='30' r='4' fill='%23ffffff'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(14, 29, 49, .84);
+      --panel-2: #0b1b2e;
+      --line: rgba(151, 178, 210, .18);
+      --text: #f4f8fc;
+      --muted: #93a7bd;
+      --accent: #5de4c7;
+      --accent-2: #7ca7ff;
+      --danger: #ffb36b;
+      --shadow: 0 28px 80px rgba(0, 0, 0, .38);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+      background:
+        radial-gradient(circle at 18% 15%, rgba(93, 228, 199, .13), transparent 27rem),
+        radial-gradient(circle at 82% 85%, rgba(124, 167, 255, .12), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    }
+
+    main {
+      width: min(940px, 100%);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: .82rem;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 5vw, 3.9rem);
+      line-height: 1.05;
+      letter-spacing: -.055em;
+    }
+
+    .intro {
+      max-width: 660px;
+      margin: 16px 0 28px;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.75;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .inputs, .results { padding: clamp(24px, 4vw, 42px); }
+
+    .inputs {
+      border-right: 1px solid var(--line);
+      background: rgba(4, 13, 25, .34);
+    }
+
+    label, .field-label {
+      display: block;
+      margin-bottom: 9px;
+      color: #cbd8e7;
+      font-size: .9rem;
+      font-weight: 700;
+    }
+
+    .field { margin-bottom: 24px; }
+
+    .input-wrap {
+      display: flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel-2);
+      transition: border-color .2s, box-shadow .2s;
+    }
+
+    .input-wrap:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(93, 228, 199, .1);
+    }
+
+    input, select {
+      min-width: 0;
+      width: 100%;
+      padding: 15px 16px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 1.08rem;
+      font-weight: 750;
+    }
+
+    select { cursor: pointer; }
+
+    input::-webkit-inner-spin-button { opacity: .6; }
+
+    .unit {
+      padding-right: 16px;
+      color: var(--muted);
+      font-size: .9rem;
+      white-space: nowrap;
+    }
+
+    .duration {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .mode-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-bottom: 24px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(4, 13, 25, .48);
+    }
+
+    .mode-switch input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+    }
+
+    .mode-switch label {
+      margin: 0;
+      padding: 11px 9px;
+      border-radius: 11px;
+      color: var(--muted);
+      text-align: center;
+      cursor: pointer;
+      transition: color .2s, background .2s, box-shadow .2s;
+    }
+
+    .mode-switch input:checked + label {
+      background: #18304b;
+      color: var(--text);
+      box-shadow: 0 5px 16px rgba(0, 0, 0, .18);
+    }
+
+    .mode-switch input:focus-visible + label {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    [hidden] { display: none !important; }
+
+    .hint, .formula {
+      margin: 0;
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.65;
+    }
+
+    .results {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 28px;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 18px;
+      color: #b6c7d8;
+      font-size: .86rem;
+      font-weight: 700;
+    }
+
+    .status::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 15px var(--accent);
+      content: "";
+    }
+
+    .primary-result {
+      margin: 0;
+      font-size: clamp(3.4rem, 9vw, 6.4rem);
+      font-weight: 850;
+      line-height: .92;
+      letter-spacing: -.075em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .primary-result span {
+      margin-left: .08em;
+      color: var(--accent);
+      font-size: .42em;
+      letter-spacing: -.02em;
+    }
+
+    .primary-label {
+      margin: 14px 0 0;
+      color: #c7d5e4;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .secondary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(6, 18, 33, .52);
+    }
+
+    .metric-label {
+      margin: 0 0 9px;
+      color: var(--muted);
+      font-size: .8rem;
+    }
+
+    .metric-value {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .warning {
+      display: none;
+      margin: 0;
+      color: var(--danger);
+      font-size: .9rem;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .warning.show { display: block; }
+
+    @media (max-width: 720px) {
+      body { align-items: start; padding-top: 24px; }
+      .app { grid-template-columns: 1fr; border-radius: 22px; }
+      .inputs { border-right: 0; border-bottom: 1px solid var(--line); }
+      .intro { margin-bottom: 20px; }
+    }
+
+    @media (max-width: 420px) {
+      .duration, .secondary-grid { grid-template-columns: 1fr; }
+      .inputs, .results { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Codex Quota Planner</p>
+    <h1>Codex 额度规划器</h1>
+    <p class="intro">把剩余额度按重置前涉及的自然日平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
+
+    <section class="app" aria-label="额度计算器">
+      <div class="inputs">
+        <div class="field">
+          <label for="remaining">当前剩余额度</label>
+          <div class="input-wrap">
+            <input id="remaining" type="number" min="0" max="100" step="0.1" value="70" inputmode="decimal">
+            <span class="unit">%</span>
+          </div>
+        </div>
+
+        <fieldset class="mode-switch" aria-label="重置时间输入方式">
+          <input id="mode-duration" name="reset-mode" type="radio" value="duration" checked>
+          <label for="mode-duration">还剩多久</label>
+          <input id="mode-date" name="reset-mode" type="radio" value="date">
+          <label for="mode-date">指定时间</label>
+        </fieldset>
+
+        <div id="duration-panel" class="field">
+          <span class="field-label">距离重置还有</span>
+          <div class="duration">
+            <div class="input-wrap">
+              <input id="days" aria-label="天数" type="number" min="0" step="1" value="3" inputmode="numeric">
+              <span class="unit">天</span>
+            </div>
+            <div class="input-wrap">
+              <input id="hours" aria-label="小时数" type="number" min="0" max="23" step="1" value="8" inputmode="numeric">
+              <span class="unit">小时</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="date-panel" class="field" hidden>
+          <span class="field-label">额度重置时间</span>
+          <div class="duration">
+            <div class="input-wrap">
+              <input id="reset-date" aria-label="重置年月日" type="date">
+            </div>
+            <div class="input-wrap">
+              <select id="reset-hour" aria-label="重置小时"></select>
+              <span class="unit">时</span>
+            </div>
+          </div>
+        </div>
+
+        <p class="hint">今天和重置日都算一天：今天重置算 1 天，明天重置算 2 天，具体小时不改变每日份额。</p>
+      </div>
+
+      <div class="results" aria-live="polite">
+        <div>
+          <div class="status" id="status">正在获取当前时间</div>
+          <p class="primary-result"><output id="minRemaining">—</output><span>%</span></p>
+          <p class="primary-label">今晚最低应剩</p>
+        </div>
+
+        <p class="warning" id="warning" role="alert"></p>
+
+        <div class="secondary-grid">
+          <div class="metric">
+            <p class="metric-label">今天最多可用</p>
+            <p class="metric-value"><output id="todayBudget">—</output>%</p>
+          </div>
+          <div class="metric">
+            <p class="metric-label">平均每天可用</p>
+            <p class="metric-value"><output id="dailyBudget">—</output>%</p>
+          </div>
+          <div class="metric">
+            <p class="metric-label">预计重置时间</p>
+            <p class="metric-value" id="resetAt">—</p>
+          </div>
+          <div class="metric">
+            <p class="metric-label">需覆盖自然日</p>
+            <p class="metric-value"><output id="coverageDays">—</output> 天</p>
+          </div>
+        </div>
+
+        <p class="formula">计算：今日预算 = 当前剩余额度 ÷ 从今天到重置日的自然日数（首尾都计入）。</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const elements = {
+      remaining: document.querySelector('#remaining'),
+      modes: [...document.querySelectorAll('input[name="reset-mode"]')],
+      durationPanel: document.querySelector('#duration-panel'),
+      datePanel: document.querySelector('#date-panel'),
+      days: document.querySelector('#days'),
+      hours: document.querySelector('#hours'),
+      resetDate: document.querySelector('#reset-date'),
+      resetHour: document.querySelector('#reset-hour'),
+      minRemaining: document.querySelector('#minRemaining'),
+      todayBudget: document.querySelector('#todayBudget'),
+      dailyBudget: document.querySelector('#dailyBudget'),
+      coverageDays: document.querySelector('#coverageDays'),
+      resetAt: document.querySelector('#resetAt'),
+      status: document.querySelector('#status'),
+      warning: document.querySelector('#warning')
+    };
+
+    const formatNumber = (value) => Number(value.toFixed(2)).toString();
+    const STORAGE_KEY = 'quota-pace-state-v1';
+
+    const formatCurrentTime = (date) => new Intl.DateTimeFormat('zh-CN', {
+      month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(date);
+
+    function calculate(remaining, resetAt, now = new Date()) {
+      if (!Number.isFinite(remaining) || !(resetAt instanceof Date) || Number.isNaN(resetAt.getTime())) {
+        throw new Error('请把输入填写完整。');
+      }
+      if (remaining < 0 || remaining > 100) {
+        throw new Error('剩余额度应在 0% 到 100% 之间。');
+      }
+      if (resetAt <= now) {
+        throw new Error('重置时间必须晚于当前时间。');
+      }
+
+      const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+      const resetDayUtc = Date.UTC(resetAt.getFullYear(), resetAt.getMonth(), resetAt.getDate());
+      const coverageDays = Math.round((resetDayUtc - todayUtc) / 86400000) + 1;
+      const todayBudget = remaining / coverageDays;
+      const minRemaining = Math.max(0, remaining - todayBudget);
+      return {
+        minRemaining,
+        todayBudget,
+        dailyBudget: todayBudget,
+        coverageDays,
+        resetAt,
+        resetsToday: resetAt.getFullYear() === now.getFullYear()
+          && resetAt.getMonth() === now.getMonth()
+          && resetAt.getDate() === now.getDate()
+      };
+    }
+
+    function getSelectedMode() {
+      return elements.modes.find((input) => input.checked)?.value || 'duration';
+    }
+
+    function persistState() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          remaining: elements.remaining.value,
+          mode: getSelectedMode(),
+          days: elements.days.value,
+          hours: elements.hours.value,
+          resetDate: elements.resetDate.value,
+          resetHour: elements.resetHour.value
+        }));
+      } catch (_) {
+        // 某些浏览器可能禁止本地文件存储；计算功能仍可正常使用。
+      }
+    }
+
+    function restoreState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (!saved || typeof saved !== 'object') return;
+        ['remaining', 'days', 'hours', 'resetDate', 'resetHour'].forEach((key) => {
+          if (typeof saved[key] === 'string') elements[key].value = saved[key];
+        });
+        if (saved.mode === 'duration' || saved.mode === 'date') {
+          const savedMode = elements.modes.find((input) => input.value === saved.mode);
+          if (savedMode) savedMode.checked = true;
+        }
+      } catch (_) {
+        // 忽略损坏或不可用的本地记录，继续使用页面默认值。
+      }
+    }
+
+    function syncModePanels() {
+      const durationMode = getSelectedMode() === 'duration';
+      elements.durationPanel.hidden = !durationMode;
+      elements.datePanel.hidden = durationMode;
+    }
+
+    function getResetAt(now) {
+      if (getSelectedMode() === 'duration') {
+        const days = Number(elements.days.value);
+        const hours = Number(elements.hours.value);
+        if (![days, hours].every(Number.isFinite)) throw new Error('请填写剩余天数和小时数。');
+        if (days < 0 || hours < 0 || hours >= 24) {
+          throw new Error('时间应为非负数，小时请填写 0 到 23。');
+        }
+        return new Date(now.getTime() + (days * 24 + hours) * 3600000);
+      }
+
+      if (!elements.resetDate.value) throw new Error('请选择重置日期。');
+      const [year, month, day] = elements.resetDate.value.split('-').map(Number);
+      return new Date(year, month - 1, day, Number(elements.resetHour.value), 0, 0, 0);
+    }
+
+    function render() {
+      try {
+        const now = new Date();
+        const result = calculate(Number(elements.remaining.value), getResetAt(now), now);
+
+        elements.minRemaining.value = formatNumber(result.minRemaining);
+        elements.todayBudget.value = formatNumber(result.todayBudget);
+        elements.dailyBudget.value = formatNumber(result.dailyBudget);
+        elements.coverageDays.value = result.coverageDays;
+        elements.resetAt.textContent = new Intl.DateTimeFormat('zh-CN', {
+          month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+        }).format(result.resetAt);
+        const nowText = formatCurrentTime(now);
+        elements.status.textContent = result.resetsToday
+          ? `当前 ${nowText} · 今晚前重置`
+          : `当前 ${nowText} · 动态计算`;
+        elements.warning.textContent = '';
+        elements.warning.classList.remove('show');
+      } catch (error) {
+        ['minRemaining', 'todayBudget', 'dailyBudget', 'coverageDays'].forEach((key) => {
+          elements[key].value = '—';
+        });
+        elements.resetAt.textContent = '—';
+        elements.status.textContent = '等待有效输入';
+        elements.warning.textContent = error.message;
+        elements.warning.classList.add('show');
+      }
+    }
+
+    ['remaining', 'days', 'hours', 'resetDate', 'resetHour'].forEach((key) => {
+      elements[key].addEventListener('input', () => {
+        persistState();
+        render();
+      });
+    });
+
+    elements.modes.forEach((input) => input.addEventListener('change', () => {
+      syncModePanels();
+      persistState();
+      render();
+    }));
+
+    function initializeDateInputs() {
+      const now = new Date();
+      const nextHour = new Date(now);
+      nextHour.setMinutes(0, 0, 0);
+      nextHour.setHours(nextHour.getHours() + 1);
+      const localDate = new Date(nextHour.getTime() - nextHour.getTimezoneOffset() * 60000)
+        .toISOString().slice(0, 10);
+      elements.resetDate.value = localDate;
+      elements.resetDate.min = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+        .toISOString().slice(0, 10);
+      elements.resetHour.innerHTML = Array.from({ length: 24 }, (_, hour) =>
+        `<option value="${hour}">${String(hour).padStart(2, '0')}:00</option>`
+      ).join('');
+      elements.resetHour.value = String(nextHour.getHours());
+    }
+
+    initializeDateInputs();
+    restoreState();
+    syncModePanels();
+    render();
+    setInterval(render, 60000);
+
+    if (document.modelContext?.registerTool) {
+      const lifecycle = new AbortController();
+      document.modelContext.registerTool({
+        name: 'calculate_quota_pace',
+        title: '计算今日额度',
+        description: '输入当前剩余额度和距离重置的天数、小时数，更新页面并返回今天的额度分配结果。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            remainingPercent: { type: 'number', minimum: 0, maximum: 100 },
+            daysUntilReset: { type: 'integer', minimum: 0 },
+            hoursUntilReset: { type: 'integer', minimum: 0, maximum: 23 }
+          },
+          required: ['remainingPercent', 'daysUntilReset', 'hoursUntilReset'],
+          additionalProperties: false
+        },
+        annotations: { readOnlyHint: false, untrustedContentHint: false },
+        execute(input) {
+          document.querySelector('#mode-duration').checked = true;
+          elements.durationPanel.hidden = false;
+          elements.datePanel.hidden = true;
+          elements.remaining.value = input.remainingPercent;
+          elements.days.value = input.daysUntilReset;
+          elements.hours.value = input.hoursUntilReset;
+          persistState();
+          render();
+          const now = new Date();
+          const resetAt = new Date(now.getTime() + (input.daysUntilReset * 24 + input.hoursUntilReset) * 3600000);
+          const result = calculate(input.remainingPercent, resetAt, now);
+          return {
+            tonightMinimumRemainingPercent: Number(formatNumber(result.minRemaining)),
+            todayMaximumUsagePercent: Number(formatNumber(result.todayBudget)),
+            dailyBudgetPercent: Number(formatNumber(result.dailyBudget))
+          };
+        }
+      }, { signal: lifecycle.signal });
+    }
+  </script>
+</body>
+</html>
