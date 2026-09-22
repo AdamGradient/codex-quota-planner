@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
-  <meta name="description" content="按工作时段规划 Codex 使用额度，计算今天可用额度和今晚最低保留额度。">
+  <meta name="description" content="按自然活跃时段规划 Codex 使用额度，计算今天可用额度和今晚最低保留额度。">
   <title>Codex 额度规划器</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307111f'/%3E%3Cpath d='M18 42V30a14 14 0 0 1 28 0v12' fill='none' stroke='%235de4c7' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M32 30l8-8' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='30' r='4' fill='%23ffffff'/%3E%3C/svg%3E">
   <style>
@@ -289,7 +289,7 @@
   <main>
     <p class="eyebrow">Codex Quota Planner</p>
     <h1>Codex 额度规划器</h1>
-    <p class="intro">把剩余额度按重置前仍可使用的工作日平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
+    <p class="intro">把剩余额度按重置前仍可使用的活跃日平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
 
     <section class="app" aria-label="额度计算器">
       <div class="inputs">
@@ -335,7 +335,7 @@
           </div>
         </div>
 
-        <p class="hint">默认工作时段参考 DeepSeek 高峰期：北京时间工作日 09:00–12:00、14:00–18:00；夜间和周末不计入。</p>
+        <p class="hint">默认活跃时段参考 DeepSeek 早期错峰口径：每天 08:30–次日 00:30；凌晨 00:30–08:30 视为睡眠低谷。</p>
       </div>
 
       <div class="results" aria-live="polite">
@@ -353,7 +353,7 @@
             <p class="metric-value"><output id="todayBudget">—</output>%</p>
           </div>
           <div class="metric">
-            <p class="metric-label">平均每工作日可用</p>
+            <p class="metric-label">平均每活跃日可用</p>
             <p class="metric-value"><output id="dailyBudget">—</output>%</p>
           </div>
           <div class="metric">
@@ -361,12 +361,12 @@
             <p class="metric-value" id="resetAt">—</p>
           </div>
           <div class="metric">
-            <p class="metric-label">需覆盖工作日</p>
+            <p class="metric-label">需覆盖活跃日</p>
             <p class="metric-value"><output id="coverageDays">—</output> 天</p>
           </div>
         </div>
 
-        <p class="formula">计算：统计从当前时刻到重置前仍有工作时段的日期；今日预算 = 当前剩余额度 ÷ 工作日数。</p>
+        <p class="formula">计算：统计从当前时刻到重置前仍有活跃时段的日期；今日预算 = 当前剩余额度 ÷ 活跃日数。</p>
       </div>
     </section>
   </main>
@@ -392,27 +392,24 @@
 
     const formatNumber = (value) => Number(value.toFixed(2)).toString();
     const STORAGE_KEY = 'quota-pace-state-v1';
-    const WORK_WINDOWS = [[9, 12], [14, 18]];
+    const ACTIVE_WINDOWS_MINUTES = [[0, 30], [8 * 60 + 30, 24 * 60]];
 
     const formatCurrentTime = (date) => new Intl.DateTimeFormat('zh-CN', {
       month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
     }).format(date);
 
-    function hasUsableWorkWindow(day, now, resetAt) {
-      const weekday = day.getDay();
-      if (weekday < 1 || weekday > 5) return false;
-
-      return WORK_WINDOWS.some(([startHour, endHour]) => {
+    function hasUsableActiveWindow(day, now, resetAt) {
+      return ACTIVE_WINDOWS_MINUTES.some(([startMinute, endMinute]) => {
         const windowStart = new Date(day);
         const windowEnd = new Date(day);
-        windowStart.setHours(startHour, 0, 0, 0);
-        windowEnd.setHours(endHour, 0, 0, 0);
+        windowStart.setHours(0, startMinute, 0, 0);
+        windowEnd.setHours(0, endMinute, 0, 0);
         return Math.max(windowStart.getTime(), now.getTime())
           < Math.min(windowEnd.getTime(), resetAt.getTime());
       });
     }
 
-    function countWorkdays(now, resetAt) {
+    function countActiveDays(now, resetAt) {
       const cursor = new Date(now);
       cursor.setHours(0, 0, 0, 0);
       const lastDay = new Date(resetAt);
@@ -420,7 +417,7 @@
       let count = 0;
 
       while (cursor <= lastDay) {
-        if (hasUsableWorkWindow(cursor, now, resetAt)) count += 1;
+        if (hasUsableActiveWindow(cursor, now, resetAt)) count += 1;
         cursor.setDate(cursor.getDate() + 1);
       }
 
@@ -438,10 +435,10 @@
         throw new Error('重置时间必须晚于当前时间。');
       }
 
-      const coverageDays = countWorkdays(now, resetAt);
+      const coverageDays = countActiveDays(now, resetAt);
       const dailyBudget = coverageDays > 0 ? remaining / coverageDays : 0;
-      const todayHasWorktime = hasUsableWorkWindow(now, now, resetAt);
-      const todayBudget = todayHasWorktime ? dailyBudget : 0;
+      const todayHasActiveTime = hasUsableActiveWindow(now, now, resetAt);
+      const todayBudget = todayHasActiveTime ? dailyBudget : 0;
       const minRemaining = Math.max(0, remaining - todayBudget);
       return {
         minRemaining,
@@ -449,8 +446,8 @@
         dailyBudget,
         coverageDays,
         resetAt,
-        hasWorktime: coverageDays > 0,
-        todayHasWorktime,
+        hasActiveTime: coverageDays > 0,
+        todayHasActiveTime,
         resetsToday: resetAt.getFullYear() === now.getFullYear()
           && resetAt.getMonth() === now.getMonth()
           && resetAt.getDate() === now.getDate()
@@ -527,13 +524,13 @@
           month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
         }).format(result.resetAt);
         const nowText = formatCurrentTime(now);
-        elements.status.textContent = !result.hasWorktime
-          ? `当前 ${nowText} · 重置前无工作时段`
-          : !result.todayHasWorktime
-            ? `当前 ${nowText} · 今日工作时段已结束`
+        elements.status.textContent = !result.hasActiveTime
+          ? `当前 ${nowText} · 重置前无活跃时段`
+          : !result.todayHasActiveTime
+            ? `当前 ${nowText} · 今日活跃时段已结束`
           : result.resetsToday
               ? `当前 ${nowText} · 今日重置`
-              : `当前 ${nowText} · 按工作时段计算`;
+              : `当前 ${nowText} · 按活跃时段计算`;
         elements.warning.textContent = '';
         elements.warning.classList.remove('show');
       } catch (error) {
