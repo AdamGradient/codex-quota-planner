@@ -345,7 +345,7 @@
   <main>
     <p class="eyebrow">Codex Quota Planner</p>
     <h1>Codex 额度规划器</h1>
-    <p class="intro">把剩余额度按重置前涉及的使用份数平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
+    <p class="intro">把剩余额度按重置前涉及的工作日平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
 
     <section class="app" aria-label="额度计算器">
       <div class="inputs">
@@ -425,7 +425,7 @@
             <p class="metric-value"><output id="todayBudget">—</output>%</p>
           </div>
           <div class="metric">
-            <p class="metric-label" id="averageLabel">平均每份可用</p>
+            <p class="metric-label" id="averageLabel">平均每工作日可用</p>
             <p class="metric-value"><output id="dailyBudget">—</output>%</p>
           </div>
           <div class="metric">
@@ -433,12 +433,12 @@
             <p class="metric-value" id="resetAt">—</p>
           </div>
           <div class="metric">
-            <p class="metric-label" id="coverageLabel">需分配份数</p>
-            <p class="metric-value"><output id="coverageDays">—</output><span id="coverageUnit"> 份</span></p>
+            <p class="metric-label" id="coverageLabel">需覆盖天数</p>
+            <p class="metric-value"><output id="coverageDays">—</output><span id="coverageUnit"> 天</span></p>
           </div>
         </div>
 
-        <p class="formula" id="formula">计算：今天与中间日期各算 1 份；重置日上午、下午工作时段各算 1 份。</p>
+        <p class="formula" id="formula">计算：今天与中间日期各算 1 天；重置日下午重置算 1 天，上午重置不计入。</p>
         <div class="breakdown">
           <p class="breakdown-title">计算明细</p>
           <p class="breakdown-text" id="breakdown">—</p>
@@ -485,9 +485,9 @@
       return excludeRestDays && (date.getDay() === 0 || date.getDay() === 6);
     }
 
-    function resetDayUsageShares(resetAt) {
+    function resetDayCountsAsWorkday(resetAt) {
       const resetMinute = resetAt.getHours() * 60 + resetAt.getMinutes();
-      return DAILY_USAGE_WINDOWS_MINUTES.filter(([startMinute]) => resetMinute > startMinute).length;
+      return resetMinute >= 14 * 60;
     }
 
     function getWorkdayShareDetails(now, resetAt, excludeRestDays) {
@@ -502,12 +502,13 @@
         cursor.setDate(cursor.getDate() + 1);
       }
 
-      const resetShares = cursor.getTime() === resetDay.getTime()
+      const resetDayShare = cursor.getTime() === resetDay.getTime()
         && !isExcludedDate(resetDay, excludeRestDays)
-        ? resetDayUsageShares(resetAt)
+        && resetDayCountsAsWorkday(resetAt)
+        ? 1
         : 0;
 
-      return { dateShares, resetShares, totalShares: dateShares + resetShares };
+      return { dateShares, resetDayShare, totalShares: dateShares + resetDayShare };
     }
 
     function getHourlyBreakdown(now, resetAt, excludeRestDays) {
@@ -601,7 +602,7 @@
         coverageDays: shareDetails.totalShares,
         resetAt,
         hasPlanningShares: shareDetails.totalShares > 0,
-        breakdown: `今天及中间日期 ${shareDetails.dateShares}份 + 重置日工作时段 ${shareDetails.resetShares}份 = ${shareDetails.totalShares}份${excludeRestDays ? '（已排除周末）' : ''}。`,
+        breakdown: `今天及中间日期 ${shareDetails.dateShares}天 + 重置日 ${shareDetails.resetDayShare}天 = ${shareDetails.totalShares}天${excludeRestDays ? '（已排除周末）' : ''}。`,
         resetsToday: sameDate(resetAt, now)
       };
     }
@@ -698,10 +699,10 @@
           elements.coverageUnit.textContent = ' 小时';
           elements.formula.textContent = '计算：今天可用 = 今天剩余工作小时 ÷ 全部剩余工作小时 × 当前额度。';
         } else {
-          elements.averageLabel.textContent = '平均每份可用';
-          elements.coverageLabel.textContent = '需分配份数';
-          elements.coverageUnit.textContent = ' 份';
-          elements.formula.textContent = '计算：今天与中间日期各算 1 份；重置日上午、下午工作时段各算 1 份。';
+          elements.averageLabel.textContent = '平均每工作日可用';
+          elements.coverageLabel.textContent = '需覆盖天数';
+          elements.coverageUnit.textContent = ' 天';
+          elements.formula.textContent = '计算：今天与中间日期各算 1 天；重置日下午重置算 1 天，上午重置不计入。';
         }
         elements.resetAt.textContent = new Intl.DateTimeFormat('zh-CN', {
           month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
@@ -711,7 +712,7 @@
           ? `当前 ${nowText} · 重置前无可分配时段`
           : result.resetsToday
             ? `当前 ${nowText} · 今日重置`
-            : `当前 ${nowText} · ${result.mode === 'hourly' ? '按剩余工时计算' : '按使用份数计算'}`;
+            : `当前 ${nowText} · ${result.mode === 'hourly' ? '按剩余工时计算' : '按工作日计算'}`;
         elements.warning.textContent = '';
         elements.warning.classList.remove('show');
       } catch (error) {
