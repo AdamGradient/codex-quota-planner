@@ -212,6 +212,46 @@
       font-weight: 400;
     }
 
+    .schedule-panel {
+      margin-bottom: 24px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(4, 13, 25, .32);
+    }
+
+    .schedule-panel .mode-switch { margin-bottom: 14px; }
+
+    .segment-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .segment-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+    }
+
+    .segment-name {
+      color: var(--muted);
+      font-size: .78rem;
+      white-space: nowrap;
+    }
+
+    .time-separator {
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
+    .schedule-note {
+      margin: 11px 0 0;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.5;
+    }
+
     [hidden] { display: none !important; }
 
     .hint, .formula {
@@ -338,6 +378,8 @@
     @media (max-width: 420px) {
       .duration, .secondary-grid { grid-template-columns: 1fr; }
       .inputs, .results { padding: 22px; }
+      .segment-row { grid-template-columns: 1fr auto 1fr; }
+      .segment-name { grid-column: 1 / -1; }
     }
   </style>
 </head>
@@ -372,6 +414,41 @@
             <small>离线版按周六、周日判断；法定调休不自动识别</small>
           </span>
         </label>
+
+        <div id="hourly-settings" class="schedule-panel" hidden>
+          <span class="field-label">每日工作时段</span>
+          <fieldset class="mode-switch" aria-label="每日工作时段数量">
+            <input id="schedule-one" name="schedule-mode" type="radio" value="one">
+            <label for="schedule-one">一段（不午休）</label>
+            <input id="schedule-two" name="schedule-mode" type="radio" value="two" checked>
+            <label for="schedule-two">两段</label>
+          </fieldset>
+
+          <div id="schedule-one-panel" class="segment-list" hidden>
+            <div class="segment-row">
+              <span class="segment-name">工作</span>
+              <div class="input-wrap"><input id="one-start" aria-label="一段工作开始时间" type="time" value="09:00"></div>
+              <span class="time-separator">至</span>
+              <div class="input-wrap"><input id="one-end" aria-label="一段工作结束时间" type="time" value="18:00"></div>
+            </div>
+          </div>
+
+          <div id="schedule-two-panel" class="segment-list">
+            <div class="segment-row">
+              <span class="segment-name">第一段</span>
+              <div class="input-wrap"><input id="two-start-1" aria-label="第一段工作开始时间" type="time" value="09:00"></div>
+              <span class="time-separator">至</span>
+              <div class="input-wrap"><input id="two-end-1" aria-label="第一段工作结束时间" type="time" value="12:00"></div>
+            </div>
+            <div class="segment-row">
+              <span class="segment-name">第二段</span>
+              <div class="input-wrap"><input id="two-start-2" aria-label="第二段工作开始时间" type="time" value="14:00"></div>
+              <span class="time-separator">至</span>
+              <div class="input-wrap"><input id="two-end-2" aria-label="第二段工作结束时间" type="time" value="18:00"></div>
+            </div>
+          </div>
+          <p class="schedule-note">结束时间早于开始时间时自动按跨天处理，例如 22:00–02:00。</p>
+        </div>
 
         <fieldset class="mode-switch" aria-label="重置时间输入方式">
           <input id="mode-duration" name="reset-mode" type="radio" value="duration" checked>
@@ -453,6 +530,16 @@
       modes: [...document.querySelectorAll('input[name="reset-mode"]')],
       calcModes: [...document.querySelectorAll('input[name="calc-mode"]')],
       excludeRestDays: document.querySelector('#exclude-rest-days'),
+      hourlySettings: document.querySelector('#hourly-settings'),
+      scheduleModes: [...document.querySelectorAll('input[name="schedule-mode"]')],
+      scheduleOnePanel: document.querySelector('#schedule-one-panel'),
+      scheduleTwoPanel: document.querySelector('#schedule-two-panel'),
+      oneStart: document.querySelector('#one-start'),
+      oneEnd: document.querySelector('#one-end'),
+      twoStart1: document.querySelector('#two-start-1'),
+      twoEnd1: document.querySelector('#two-end-1'),
+      twoStart2: document.querySelector('#two-start-2'),
+      twoEnd2: document.querySelector('#two-end-2'),
       durationPanel: document.querySelector('#duration-panel'),
       datePanel: document.querySelector('#date-panel'),
       days: document.querySelector('#days'),
@@ -475,7 +562,7 @@
 
     const formatNumber = (value) => Number(value.toFixed(2)).toString();
     const STORAGE_KEY = 'quota-pace-state-v1';
-    const DAILY_USAGE_WINDOWS_MINUTES = [[9 * 60, 12 * 60], [14 * 60, 18 * 60]];
+    const DEFAULT_SCHEDULE_WINDOWS = [[9 * 60, 12 * 60], [14 * 60, 18 * 60]];
 
     const formatCurrentTime = (date) => new Intl.DateTimeFormat('zh-CN', {
       month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
@@ -511,31 +598,67 @@
       return { dateShares, resetDayShare, totalShares: dateShares + resetDayShare };
     }
 
-    function getHourlyBreakdown(now, resetAt, excludeRestDays) {
+    function getHourlyBreakdown(now, resetAt, excludeRestDays, scheduleWindows) {
+      const firstAnchor = new Date(now);
+      firstAnchor.setHours(0, 0, 0, 0);
+      firstAnchor.setDate(firstAnchor.getDate() - 1);
+      const lastAnchor = new Date(resetAt);
+      lastAnchor.setHours(0, 0, 0, 0);
+      const intervals = [];
+
+      const anchor = new Date(firstAnchor);
+      while (anchor <= lastAnchor) {
+        scheduleWindows.forEach(([startMinute, endMinute]) => {
+          const start = new Date(anchor);
+          const end = new Date(anchor);
+          start.setHours(0, startMinute, 0, 0);
+          end.setHours(0, endMinute, 0, 0);
+          intervals.push({ start: start.getTime(), end: end.getTime() });
+        });
+        anchor.setDate(anchor.getDate() + 1);
+      }
+
+      intervals.sort((a, b) => a.start - b.start);
+      const merged = [];
+      intervals.forEach((interval) => {
+        const last = merged[merged.length - 1];
+        if (last && interval.start <= last.end) {
+          last.end = Math.max(last.end, interval.end);
+        } else {
+          merged.push({ ...interval });
+        }
+      });
+
+      const hoursByDate = new Map();
+      merged.forEach((interval) => {
+        let chunkStart = Math.max(interval.start, now.getTime());
+        const overlapEnd = Math.min(interval.end, resetAt.getTime());
+        while (chunkStart < overlapEnd) {
+          const chunkDate = new Date(chunkStart);
+          const dayStart = new Date(chunkDate);
+          dayStart.setHours(0, 0, 0, 0);
+          const nextDay = new Date(dayStart);
+          nextDay.setDate(nextDay.getDate() + 1);
+          const chunkEnd = Math.min(overlapEnd, nextDay.getTime());
+          if (!isExcludedDate(dayStart, excludeRestDays)) {
+            const key = `${dayStart.getFullYear()}-${dayStart.getMonth()}-${dayStart.getDate()}`;
+            hoursByDate.set(key, (hoursByDate.get(key) || 0) + (chunkEnd - chunkStart) / 3600000);
+          }
+          chunkStart = chunkEnd;
+        }
+      });
+
       const cursor = new Date(now);
       cursor.setHours(0, 0, 0, 0);
       const lastDay = new Date(resetAt);
       lastDay.setHours(0, 0, 0, 0);
       const entries = [];
-
       while (cursor <= lastDay) {
-        let milliseconds = 0;
+        const key = `${cursor.getFullYear()}-${cursor.getMonth()}-${cursor.getDate()}`;
         const excluded = isExcludedDate(cursor, excludeRestDays);
-        if (!excluded) {
-          DAILY_USAGE_WINDOWS_MINUTES.forEach(([startMinute, endMinute]) => {
-            const windowStart = new Date(cursor);
-            const windowEnd = new Date(cursor);
-            windowStart.setHours(0, startMinute, 0, 0);
-            windowEnd.setHours(0, endMinute, 0, 0);
-            const overlapStart = Math.max(windowStart.getTime(), now.getTime());
-            const overlapEnd = Math.min(windowEnd.getTime(), resetAt.getTime());
-            milliseconds += Math.max(0, overlapEnd - overlapStart);
-          });
-        }
-        entries.push({ date: new Date(cursor), hours: milliseconds / 3600000, excluded });
+        entries.push({ date: new Date(cursor), hours: hoursByDate.get(key) || 0, excluded });
         cursor.setDate(cursor.getDate() + 1);
       }
-
       return entries;
     }
 
@@ -558,7 +681,8 @@
       resetAt,
       now = new Date(),
       calcMode = 'workday',
-      excludeRestDays = false
+      excludeRestDays = false,
+      scheduleWindows = DEFAULT_SCHEDULE_WINDOWS
     ) {
       if (!Number.isFinite(remaining) || !(resetAt instanceof Date) || Number.isNaN(resetAt.getTime())) {
         throw new Error('请把输入填写完整。');
@@ -571,7 +695,7 @@
       }
 
       if (calcMode === 'hourly') {
-        const entries = getHourlyBreakdown(now, resetAt, excludeRestDays);
+        const entries = getHourlyBreakdown(now, resetAt, excludeRestDays, scheduleWindows);
         const totalHours = entries.reduce((sum, entry) => sum + entry.hours, 0);
         const todayHours = entries.find((entry) => sameDate(entry.date, now))?.hours || 0;
         const todayRatio = totalHours > 0 ? todayHours / totalHours : 0;
@@ -615,6 +739,34 @@
       return elements.calcModes.find((input) => input.checked)?.value || 'workday';
     }
 
+    function getSelectedScheduleMode() {
+      return elements.scheduleModes.find((input) => input.checked)?.value || 'two';
+    }
+
+    function parseTimeValue(value, label) {
+      const match = /^(\d{2}):(\d{2})$/.exec(value);
+      if (!match) throw new Error(`请填写${label}。`);
+      return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function makeScheduleWindow(startValue, endValue, label) {
+      const start = parseTimeValue(startValue, `${label}开始时间`);
+      let end = parseTimeValue(endValue, `${label}结束时间`);
+      if (start === end) throw new Error(`${label}的开始和结束时间不能相同。`);
+      if (end < start) end += 24 * 60;
+      return [start, end];
+    }
+
+    function getConfiguredSchedule() {
+      if (getSelectedScheduleMode() === 'one') {
+        return [makeScheduleWindow(elements.oneStart.value, elements.oneEnd.value, '工作时段')];
+      }
+      return [
+        makeScheduleWindow(elements.twoStart1.value, elements.twoEnd1.value, '第一段'),
+        makeScheduleWindow(elements.twoStart2.value, elements.twoEnd2.value, '第二段')
+      ];
+    }
+
     function persistState() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -622,6 +774,13 @@
           mode: getSelectedMode(),
           calcMode: getSelectedCalcMode(),
           excludeRestDays: elements.excludeRestDays.checked,
+          scheduleMode: getSelectedScheduleMode(),
+          oneStart: elements.oneStart.value,
+          oneEnd: elements.oneEnd.value,
+          twoStart1: elements.twoStart1.value,
+          twoEnd1: elements.twoEnd1.value,
+          twoStart2: elements.twoStart2.value,
+          twoEnd2: elements.twoEnd2.value,
           days: elements.days.value,
           hours: elements.hours.value,
           resetDate: elements.resetDate.value,
@@ -636,7 +795,8 @@
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
         if (!saved || typeof saved !== 'object') return;
-        ['remaining', 'days', 'hours', 'resetDate', 'resetHour'].forEach((key) => {
+        ['remaining', 'days', 'hours', 'resetDate', 'resetHour',
+          'oneStart', 'oneEnd', 'twoStart1', 'twoEnd1', 'twoStart2', 'twoEnd2'].forEach((key) => {
           if (typeof saved[key] === 'string') elements[key].value = saved[key];
         });
         if (saved.mode === 'duration' || saved.mode === 'date') {
@@ -650,6 +810,10 @@
         if (typeof saved.excludeRestDays === 'boolean') {
           elements.excludeRestDays.checked = saved.excludeRestDays;
         }
+        if (saved.scheduleMode === 'one' || saved.scheduleMode === 'two') {
+          const savedScheduleMode = elements.scheduleModes.find((input) => input.value === saved.scheduleMode);
+          if (savedScheduleMode) savedScheduleMode.checked = true;
+        }
       } catch (_) {
         // 忽略损坏或不可用的本地记录，继续使用页面默认值。
       }
@@ -659,6 +823,11 @@
       const durationMode = getSelectedMode() === 'duration';
       elements.durationPanel.hidden = !durationMode;
       elements.datePanel.hidden = durationMode;
+      const hourlyMode = getSelectedCalcMode() === 'hourly';
+      elements.hourlySettings.hidden = !hourlyMode;
+      const oneSegment = getSelectedScheduleMode() === 'one';
+      elements.scheduleOnePanel.hidden = !oneSegment;
+      elements.scheduleTwoPanel.hidden = oneSegment;
     }
 
     function getResetAt(now) {
@@ -685,7 +854,8 @@
           getResetAt(now),
           now,
           getSelectedCalcMode(),
-          elements.excludeRestDays.checked
+          elements.excludeRestDays.checked,
+          getConfiguredSchedule()
         );
 
         elements.minRemaining.value = formatNumber(result.minRemaining);
@@ -727,7 +897,8 @@
       }
     }
 
-    ['remaining', 'days', 'hours', 'resetDate', 'resetHour'].forEach((key) => {
+    ['remaining', 'days', 'hours', 'resetDate', 'resetHour',
+      'oneStart', 'oneEnd', 'twoStart1', 'twoEnd1', 'twoStart2', 'twoEnd2'].forEach((key) => {
       elements[key].addEventListener('input', () => {
         persistState();
         render();
@@ -741,6 +912,13 @@
     }));
 
     elements.calcModes.forEach((input) => input.addEventListener('change', () => {
+      syncModePanels();
+      persistState();
+      render();
+    }));
+
+    elements.scheduleModes.forEach((input) => input.addEventListener('change', () => {
+      syncModePanels();
       persistState();
       render();
     }));
@@ -805,7 +983,8 @@
             resetAt,
             now,
             getSelectedCalcMode(),
-            elements.excludeRestDays.checked
+            elements.excludeRestDays.checked,
+            getConfiguredSchedule()
           );
           return {
             tonightMinimumRemainingPercent: Number(formatNumber(result.minRemaining)),
