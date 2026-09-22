@@ -177,9 +177,65 @@
       outline-offset: 2px;
     }
 
+    .option-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      margin: -8px 0 24px;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(4, 13, 25, .32);
+      cursor: pointer;
+    }
+
+    .option-row input {
+      width: 18px;
+      height: 18px;
+      margin: 2px 0 0;
+      padding: 0;
+      accent-color: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .option-copy {
+      display: grid;
+      gap: 3px;
+      color: #cbd8e7;
+      font-size: .88rem;
+      line-height: 1.45;
+    }
+
+    .option-copy small {
+      color: var(--muted);
+      font-size: .76rem;
+      font-weight: 400;
+    }
+
     [hidden] { display: none !important; }
 
     .hint, .formula {
+      margin: 0;
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.65;
+    }
+
+    .breakdown {
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(6, 18, 33, .42);
+    }
+
+    .breakdown-title {
+      margin: 0 0 7px;
+      color: #cbd8e7;
+      font-size: .82rem;
+      font-weight: 800;
+    }
+
+    .breakdown-text {
       margin: 0;
       color: var(--muted);
       font-size: .82rem;
@@ -289,7 +345,7 @@
   <main>
     <p class="eyebrow">Codex Quota Planner</p>
     <h1>Codex 额度规划器</h1>
-    <p class="intro">把剩余额度按重置前涉及的规划日平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
+    <p class="intro">把剩余额度按重置前涉及的使用份数平均分配，算出今天还能放心用多少，以及今晚应至少保留多少。</p>
 
     <section class="app" aria-label="额度计算器">
       <div class="inputs">
@@ -300,6 +356,22 @@
             <span class="unit">%</span>
           </div>
         </div>
+
+        <span class="field-label">计算方式</span>
+        <fieldset class="mode-switch" aria-label="额度计算方式">
+          <input id="calc-workday" name="calc-mode" type="radio" value="workday" checked>
+          <label for="calc-workday">工作日</label>
+          <input id="calc-hourly" name="calc-mode" type="radio" value="hourly">
+          <label for="calc-hourly">小时工作日</label>
+        </fieldset>
+
+        <label class="option-row" for="exclude-rest-days">
+          <input id="exclude-rest-days" type="checkbox">
+          <span class="option-copy">
+            <span>排除休息日</span>
+            <small>离线版按周六、周日判断；法定调休不自动识别</small>
+          </span>
+        </label>
 
         <fieldset class="mode-switch" aria-label="重置时间输入方式">
           <input id="mode-duration" name="reset-mode" type="radio" value="duration" checked>
@@ -353,7 +425,7 @@
             <p class="metric-value"><output id="todayBudget">—</output>%</p>
           </div>
           <div class="metric">
-            <p class="metric-label">平均每规划日可用</p>
+            <p class="metric-label" id="averageLabel">平均每份可用</p>
             <p class="metric-value"><output id="dailyBudget">—</output>%</p>
           </div>
           <div class="metric">
@@ -361,12 +433,16 @@
             <p class="metric-value" id="resetAt">—</p>
           </div>
           <div class="metric">
-            <p class="metric-label">需覆盖规划日</p>
-            <p class="metric-value"><output id="coverageDays">—</output> 天</p>
+            <p class="metric-label" id="coverageLabel">需分配份数</p>
+            <p class="metric-value"><output id="coverageDays">—</output><span id="coverageUnit"> 份</span></p>
           </div>
         </div>
 
-        <p class="formula">计算：今天固定计入；重置日在 09:00 后重置则计入；中间每个日期都计入。</p>
+        <p class="formula" id="formula">计算：今天与中间日期各算 1 份；重置日上午、下午工作时段各算 1 份。</p>
+        <div class="breakdown">
+          <p class="breakdown-title">计算明细</p>
+          <p class="breakdown-text" id="breakdown">—</p>
+        </div>
       </div>
     </section>
   </main>
@@ -375,6 +451,8 @@
     const elements = {
       remaining: document.querySelector('#remaining'),
       modes: [...document.querySelectorAll('input[name="reset-mode"]')],
+      calcModes: [...document.querySelectorAll('input[name="calc-mode"]')],
+      excludeRestDays: document.querySelector('#exclude-rest-days'),
       durationPanel: document.querySelector('#duration-panel'),
       datePanel: document.querySelector('#date-panel'),
       days: document.querySelector('#days'),
@@ -385,6 +463,11 @@
       todayBudget: document.querySelector('#todayBudget'),
       dailyBudget: document.querySelector('#dailyBudget'),
       coverageDays: document.querySelector('#coverageDays'),
+      averageLabel: document.querySelector('#averageLabel'),
+      coverageLabel: document.querySelector('#coverageLabel'),
+      coverageUnit: document.querySelector('#coverageUnit'),
+      formula: document.querySelector('#formula'),
+      breakdown: document.querySelector('#breakdown'),
       resetAt: document.querySelector('#resetAt'),
       status: document.querySelector('#status'),
       warning: document.querySelector('#warning')
@@ -398,31 +481,84 @@
       month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
     }).format(date);
 
-    function resetDayHasUsage(resetAt) {
-      const resetMinute = resetAt.getHours() * 60 + resetAt.getMinutes();
-      return DAILY_USAGE_WINDOWS_MINUTES.some(([startMinute]) => resetMinute > startMinute);
+    function isExcludedDate(date, excludeRestDays) {
+      return excludeRestDays && (date.getDay() === 0 || date.getDay() === 6);
     }
 
-    function countPlanningDays(now, resetAt) {
+    function resetDayUsageShares(resetAt) {
+      const resetMinute = resetAt.getHours() * 60 + resetAt.getMinutes();
+      return DAILY_USAGE_WINDOWS_MINUTES.filter(([startMinute]) => resetMinute > startMinute).length;
+    }
+
+    function getWorkdayShareDetails(now, resetAt, excludeRestDays) {
       const cursor = new Date(now);
       cursor.setHours(0, 0, 0, 0);
       const resetDay = new Date(resetAt);
       resetDay.setHours(0, 0, 0, 0);
-      let count = 0;
+      let dateShares = 0;
 
       while (cursor < resetDay) {
-        count += 1;
+        if (!isExcludedDate(cursor, excludeRestDays)) dateShares += 1;
         cursor.setDate(cursor.getDate() + 1);
       }
 
-      if (cursor.getTime() === resetDay.getTime() && resetDayHasUsage(resetAt)) {
-        count += 1;
-      }
+      const resetShares = cursor.getTime() === resetDay.getTime()
+        && !isExcludedDate(resetDay, excludeRestDays)
+        ? resetDayUsageShares(resetAt)
+        : 0;
 
-      return count;
+      return { dateShares, resetShares, totalShares: dateShares + resetShares };
     }
 
-    function calculate(remaining, resetAt, now = new Date()) {
+    function getHourlyBreakdown(now, resetAt, excludeRestDays) {
+      const cursor = new Date(now);
+      cursor.setHours(0, 0, 0, 0);
+      const lastDay = new Date(resetAt);
+      lastDay.setHours(0, 0, 0, 0);
+      const entries = [];
+
+      while (cursor <= lastDay) {
+        let milliseconds = 0;
+        const excluded = isExcludedDate(cursor, excludeRestDays);
+        if (!excluded) {
+          DAILY_USAGE_WINDOWS_MINUTES.forEach(([startMinute, endMinute]) => {
+            const windowStart = new Date(cursor);
+            const windowEnd = new Date(cursor);
+            windowStart.setHours(0, startMinute, 0, 0);
+            windowEnd.setHours(0, endMinute, 0, 0);
+            const overlapStart = Math.max(windowStart.getTime(), now.getTime());
+            const overlapEnd = Math.min(windowEnd.getTime(), resetAt.getTime());
+            milliseconds += Math.max(0, overlapEnd - overlapStart);
+          });
+        }
+        entries.push({ date: new Date(cursor), hours: milliseconds / 3600000, excluded });
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      return entries;
+    }
+
+    function sameDate(a, b) {
+      return a.getFullYear() === b.getFullYear()
+        && a.getMonth() === b.getMonth()
+        && a.getDate() === b.getDate();
+    }
+
+    function formatBreakdownDate(date, now) {
+      if (sameDate(date, now)) return '今天';
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      if (sameDate(date, tomorrow)) return '明天';
+      return `${date.getMonth() + 1}/${date.getDate()}`;
+    }
+
+    function calculate(
+      remaining,
+      resetAt,
+      now = new Date(),
+      calcMode = 'workday',
+      excludeRestDays = false
+    ) {
       if (!Number.isFinite(remaining) || !(resetAt instanceof Date) || Number.isNaN(resetAt.getTime())) {
         throw new Error('请把输入填写完整。');
       }
@@ -433,20 +569,40 @@
         throw new Error('重置时间必须晚于当前时间。');
       }
 
-      const coverageDays = countPlanningDays(now, resetAt);
-      const dailyBudget = coverageDays > 0 ? remaining / coverageDays : 0;
+      if (calcMode === 'hourly') {
+        const entries = getHourlyBreakdown(now, resetAt, excludeRestDays);
+        const totalHours = entries.reduce((sum, entry) => sum + entry.hours, 0);
+        const todayHours = entries.find((entry) => sameDate(entry.date, now))?.hours || 0;
+        const todayRatio = totalHours > 0 ? todayHours / totalHours : 0;
+        const todayBudget = remaining * todayRatio;
+        return {
+          mode: 'hourly',
+          minRemaining: Math.max(0, remaining - todayBudget),
+          todayBudget,
+          dailyBudget: todayRatio * 100,
+          coverageDays: totalHours,
+          resetAt,
+          hasPlanningShares: totalHours > 0,
+          breakdown: `${entries.map((entry) => entry.excluded
+            ? `${formatBreakdownDate(entry.date, now)} 已排除`
+            : `${formatBreakdownDate(entry.date, now)} ${formatNumber(entry.hours)}小时`).join(' + ')} = ${formatNumber(totalHours)}小时；今天占 ${formatNumber(todayRatio * 100)}%。`,
+          resetsToday: sameDate(resetAt, now)
+        };
+      }
+
+      const shareDetails = getWorkdayShareDetails(now, resetAt, excludeRestDays);
+      const dailyBudget = shareDetails.totalShares > 0 ? remaining / shareDetails.totalShares : 0;
       const todayBudget = dailyBudget;
-      const minRemaining = Math.max(0, remaining - todayBudget);
       return {
-        minRemaining,
+        mode: 'workday',
+        minRemaining: Math.max(0, remaining - todayBudget),
         todayBudget,
         dailyBudget,
-        coverageDays,
+        coverageDays: shareDetails.totalShares,
         resetAt,
-        hasPlanningDays: coverageDays > 0,
-        resetsToday: resetAt.getFullYear() === now.getFullYear()
-          && resetAt.getMonth() === now.getMonth()
-          && resetAt.getDate() === now.getDate()
+        hasPlanningShares: shareDetails.totalShares > 0,
+        breakdown: `今天及中间日期 ${shareDetails.dateShares}份 + 重置日工作时段 ${shareDetails.resetShares}份 = ${shareDetails.totalShares}份${excludeRestDays ? '（已排除周末）' : ''}。`,
+        resetsToday: sameDate(resetAt, now)
       };
     }
 
@@ -454,11 +610,17 @@
       return elements.modes.find((input) => input.checked)?.value || 'duration';
     }
 
+    function getSelectedCalcMode() {
+      return elements.calcModes.find((input) => input.checked)?.value || 'workday';
+    }
+
     function persistState() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           remaining: elements.remaining.value,
           mode: getSelectedMode(),
+          calcMode: getSelectedCalcMode(),
+          excludeRestDays: elements.excludeRestDays.checked,
           days: elements.days.value,
           hours: elements.hours.value,
           resetDate: elements.resetDate.value,
@@ -479,6 +641,13 @@
         if (saved.mode === 'duration' || saved.mode === 'date') {
           const savedMode = elements.modes.find((input) => input.value === saved.mode);
           if (savedMode) savedMode.checked = true;
+        }
+        if (saved.calcMode === 'workday' || saved.calcMode === 'hourly') {
+          const savedCalcMode = elements.calcModes.find((input) => input.value === saved.calcMode);
+          if (savedCalcMode) savedCalcMode.checked = true;
+        }
+        if (typeof saved.excludeRestDays === 'boolean') {
+          elements.excludeRestDays.checked = saved.excludeRestDays;
         }
       } catch (_) {
         // 忽略损坏或不可用的本地记录，继续使用页面默认值。
@@ -510,21 +679,39 @@
     function render() {
       try {
         const now = new Date();
-        const result = calculate(Number(elements.remaining.value), getResetAt(now), now);
+        const result = calculate(
+          Number(elements.remaining.value),
+          getResetAt(now),
+          now,
+          getSelectedCalcMode(),
+          elements.excludeRestDays.checked
+        );
 
         elements.minRemaining.value = formatNumber(result.minRemaining);
         elements.todayBudget.value = formatNumber(result.todayBudget);
         elements.dailyBudget.value = formatNumber(result.dailyBudget);
-        elements.coverageDays.value = result.coverageDays;
+        elements.coverageDays.value = formatNumber(result.coverageDays);
+        elements.breakdown.textContent = result.breakdown;
+        if (result.mode === 'hourly') {
+          elements.averageLabel.textContent = '今日工作时长占比';
+          elements.coverageLabel.textContent = '剩余工作时长';
+          elements.coverageUnit.textContent = ' 小时';
+          elements.formula.textContent = '计算：今天可用 = 今天剩余工作小时 ÷ 全部剩余工作小时 × 当前额度。';
+        } else {
+          elements.averageLabel.textContent = '平均每份可用';
+          elements.coverageLabel.textContent = '需分配份数';
+          elements.coverageUnit.textContent = ' 份';
+          elements.formula.textContent = '计算：今天与中间日期各算 1 份；重置日上午、下午工作时段各算 1 份。';
+        }
         elements.resetAt.textContent = new Intl.DateTimeFormat('zh-CN', {
           month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
         }).format(result.resetAt);
         const nowText = formatCurrentTime(now);
-        elements.status.textContent = !result.hasPlanningDays
-          ? `当前 ${nowText} · 重置前无规划日`
+        elements.status.textContent = !result.hasPlanningShares
+          ? `当前 ${nowText} · 重置前无可分配时段`
           : result.resetsToday
             ? `当前 ${nowText} · 今日重置`
-            : `当前 ${nowText} · 按每日固定时段计算`;
+            : `当前 ${nowText} · ${result.mode === 'hourly' ? '按剩余工时计算' : '按使用份数计算'}`;
         elements.warning.textContent = '';
         elements.warning.classList.remove('show');
       } catch (error) {
@@ -532,6 +719,7 @@
           elements[key].value = '—';
         });
         elements.resetAt.textContent = '—';
+        elements.breakdown.textContent = '—';
         elements.status.textContent = '等待有效输入';
         elements.warning.textContent = error.message;
         elements.warning.classList.add('show');
@@ -550,6 +738,16 @@
       persistState();
       render();
     }));
+
+    elements.calcModes.forEach((input) => input.addEventListener('change', () => {
+      persistState();
+      render();
+    }));
+
+    elements.excludeRestDays.addEventListener('change', () => {
+      persistState();
+      render();
+    });
 
     function initializeDateInputs() {
       const now = new Date();
@@ -601,7 +799,13 @@
           render();
           const now = new Date();
           const resetAt = new Date(now.getTime() + (input.daysUntilReset * 24 + input.hoursUntilReset) * 3600000);
-          const result = calculate(input.remainingPercent, resetAt, now);
+          const result = calculate(
+            input.remainingPercent,
+            resetAt,
+            now,
+            getSelectedCalcMode(),
+            elements.excludeRestDays.checked
+          );
           return {
             tonightMinimumRemainingPercent: Number(formatNumber(result.minRemaining)),
             todayMaximumUsagePercent: Number(formatNumber(result.todayBudget)),
